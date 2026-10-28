@@ -1,0 +1,1119 @@
+Haan—neeche **poora lab start se end tak** diya hai: kya folder banana hai, kis file mein kya paste karna hai, kaunsi command chalani hai, aur har stage mein hum kya kar rahe hain.
+
+**Commands ek-ek karke run karna. Kisi command mein error aaye toh wahin rukna; next stage par mat jaana.**
+
+Yeh flow tumhare PDF ke according hai. :codex-file-citation{path="D:/Kubernetes_CICD_Beginner_Lab_Guide (2) (1).pdf" purpose="source"}
+
+---
+
+**1. Pehle samjho hum bana kya rahe hain**
+
+Hum ek simple Python website banayenge.
+
+```text
+Python website
+      ↓
+Local testing
+      ↓
+Docker image banana
+      ↓
+Code GitHub par upload karna
+      ↓
+GitHub Actions automatically tests run karega
+      ↓
+Tests pass hone par image Docker Hub par upload hogi
+      ↓
+Kubernetes us image se application ki 2 copies chalayega
+      ↓
+Application update karke Version 2 deploy karenge
+```
+
+| Tool | Simple meaning |
+|---|---|
+| VS Code | Yahan files likhenge aur commands chalayenge |
+| Python + Flask | Website banayenge |
+| pytest | Website ke automated tests |
+| Git + GitHub | Code aur uska history store karenge |
+| Docker Desktop | Image banayega aur local containers chalayega |
+| Docker Hub | Docker images online store karega |
+| GitHub Actions | Tests aur image publishing automate karega |
+| Kubernetes | Application ki running copies manage karega |
+
+**Docker Desktop mein login zaroori nahi hai. Docker Hub aur GitHub websites par login chahiye.**
+
+---
+
+**2. Docker Desktop aur Kubernetes ready karo**
+
+Docker Desktop open rakho.
+
+Left side **Kubernetes → Create cluster** se cluster create karo.
+
+Cluster start hone tak wait karo.
+
+VS Code kholo → **Terminal → New Terminal**.
+
+Ye commands ek-ek karke run karo:
+
+```powershell
+git --version
+```
+
+```powershell
+python --version
+```
+
+```powershell
+python -m pip --version
+```
+
+```powershell
+docker --version
+```
+
+```powershell
+docker info
+```
+
+```powershell
+kubectl version --client
+```
+
+```powershell
+kubectl config use-context docker-desktop
+```
+
+```powershell
+kubectl get nodes
+```
+
+**Expected:** last command mein node ka status `Ready` hona chahiye.
+
+Agar `python` phir MSYS wala aa raha hai, pehle Python path fix karna hoga. Us error ke saath aage mat jaana.
+
+---
+
+**3. Is baar ek clean project location banao**
+
+Purane project se confusion avoid karne ke liye is location par naya lab rakho:
+
+```text
+D:\KubernetesLab\student-k8s-demo
+```
+
+PowerShell mein:
+
+```powershell
+New-Item -ItemType Directory -Path "D:\KubernetesLab\student-k8s-demo" -Force
+```
+
+```powershell
+cd D:\KubernetesLab\student-k8s-demo
+```
+
+VS Code mein **File → Open Folder** se yahi folder select karo.
+
+**Aage ki saari terminal commands isi folder ke andar chalengi.**
+
+---
+
+**4. Ye folders aur files banao**
+
+VS Code Explorer mein main folder par right-click karke **New File** aur **New Folder** use karo.
+
+Final structure:
+
+```text
+student-k8s-demo/
+│
+├── app.py
+├── requirements.txt
+├── test_app.py
+├── Dockerfile
+├── .dockerignore
+├── .gitignore
+│
+├── k8s/
+│   ├── deployment.yaml
+│   └── service.yaml
+│
+└── .github/
+    └── workflows/
+        └── pipeline.yml
+```
+
+Banane ka order:
+
+1. Main folder mein pehli 6 files banao.
+2. Main folder mein `k8s` folder banao.
+3. `k8s` ke andar `deployment.yaml` aur `service.yaml` banao.
+4. Main folder mein `.github` folder banao.
+5. `.github` ke andar `workflows` folder banao.
+6. `workflows` ke andar `pipeline.yml` banao.
+
+**Dhyaan:**
+
+- `Dockerfile` mein `.txt` extension nahi lagana.
+- `requirements.txt` mein `.txt` hona chahiye.
+- `.github` ko `k8s` ke andar mat banana.
+- Har file mein content paste karne ke baad **Ctrl+S** dabana.
+
+---
+
+**5. `app.py` mein ye paste karo**
+
+```python
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    return "Hello Students! Kubernetes CI/CD is working!"
+
+
+@app.route("/health")
+def health():
+    return jsonify(status="healthy"), 200
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+```
+
+**Hum kya kar rahe hain:** do addresses wali website bana rahe hain:
+
+- `/` → welcome message.
+- `/health` → application healthy hai ya nahi.
+
+---
+
+**6. `requirements.txt` mein ye paste karo**
+
+```text
+Flask>=3.0,<4.0
+pytest>=8.0,<9.0
+```
+
+**Meaning:** application ko Flask chahiye aur tests ko pytest.
+
+---
+
+**7. `test_app.py` mein ye paste karo**
+
+```python
+from app import app
+
+
+def test_home_page():
+    client = app.test_client()
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert b"Kubernetes CI/CD is working" in response.data
+
+
+def test_health_endpoint():
+    client = app.test_client()
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json["status"] == "healthy"
+```
+
+**Meaning:** pehla test home page check karta hai; doosra health endpoint.
+
+---
+
+**8. `.gitignore` mein ye paste karo**
+
+```gitignore
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+```
+
+**Meaning:** temporary files, installed packages aur local secrets GitHub par upload nahi honge.
+
+---
+
+**9. Local Python environment banao aur tests chalao**
+
+VS Code terminal mein:
+
+```powershell
+cd D:\KubernetesLab\student-k8s-demo
+```
+
+```powershell
+python -m venv .venv
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Installation finish hone do.
+
+Phir:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -v
+```
+
+**Expected:**
+
+```text
+2 passed
+```
+
+Hum `.venv` ka Python directly use kar rahe hain, isliye activation aur PowerShell execution-policy change karne ki zaroorat nahi.
+
+**Screenshot lo:** terminal mein dono passing tests.
+
+---
+
+**10. Website locally chalao**
+
+```powershell
+.\.venv\Scripts\python.exe app.py
+```
+
+Browser mein kholo:
+
+```text
+http://127.0.0.1:5000/
+```
+
+Expected:
+
+```text
+Hello Students! Kubernetes CI/CD is working!
+```
+
+Phir kholo:
+
+```text
+http://127.0.0.1:5000/health
+```
+
+Expected:
+
+```json
+{"status":"healthy"}
+```
+
+**Screenshot lo:** dono browser pages.
+
+Check karne ke baad terminal mein **Ctrl+C** dabao. Isse Python server stop hoga aur port 5000 free ho jayega.
+
+---
+
+**11. `Dockerfile` mein ye paste karo**
+
+```dockerfile
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --timeout 120 --retries 10 -r requirements.txt
+
+COPY app.py .
+
+EXPOSE 5000
+
+CMD ["python", "app.py"]
+```
+
+**Meaning:** Docker Python setup karega, packages install karega, app copy karega aur start karega.
+
+Download timeout badhaya hai kyunki tumhare earlier build mein package download timeout aaya tha.
+
+---
+
+**12. `.dockerignore` mein ye paste karo**
+
+```text
+.venv/
+__pycache__/
+.pytest_cache/
+.git/
+.env
+```
+
+**Meaning:** unnecessary local files Docker build mein nahi jayengi.
+
+---
+
+**13. Docker image build karo**
+
+Docker Desktop running hona chahiye.
+
+```powershell
+docker build -t student-k8s-demo:v1 .
+```
+
+Last wala dot `.` zaroor lagana.
+
+Build complete hone ke baad:
+
+```powershell
+docker images student-k8s-demo
+```
+
+**Expected:** `student-k8s-demo` naam ki image aur `v1` tag.
+
+**Screenshot lo:** successful build aur image listing.
+
+---
+
+**14. Container chalao**
+
+```powershell
+docker run --rm -d --name student-demo -p 5000:5000 student-k8s-demo:v1
+```
+
+Phir:
+
+```powershell
+docker ps
+```
+
+```powershell
+docker logs student-demo
+```
+
+Browser mein:
+
+```text
+http://localhost:5000/
+```
+
+```text
+http://localhost:5000/health
+```
+
+**Meaning:** ab wahi website Python se directly nahi, Docker container ke andar chal rahi hai.
+
+**Screenshot lo:** `docker ps`, logs aur browser page.
+
+Check karne ke baad:
+
+```powershell
+docker stop student-demo
+```
+
+Agar port 5000 occupied aaye, container ko is command se chala sakte ho:
+
+```powershell
+docker run --rm -d --name student-demo -p 5001:5000 student-k8s-demo:v1
+```
+
+Is case mein browser address `http://localhost:5001/` hoga.
+
+---
+
+**15. Naya empty GitHub repository banao**
+
+Is clean attempt ke liye GitHub repository ka naam rakho:
+
+```text
+student-k8s-demo-v2
+```
+
+GitHub website par:
+
+1. Sign in karo.
+2. Top-right **+ → New repository**.
+3. **Repository name:** `student-k8s-demo-v2`.
+4. **Public** select karo.
+5. README add mat karo.
+6. `.gitignore` add mat karo.
+7. License add mat karo.
+8. **Create repository** click karo.
+
+**GitHub repository ka naam alag ho sakta hai. Docker Hub repository ka naam hum `student-k8s-demo` hi rakhenge.**
+
+---
+
+**16. Project GitHub par push karo**
+
+Naye project ke terminal mein:
+
+```powershell
+git init
+```
+
+Git commit identity set karne ke liye:
+
+```powershell
+git config user.name "Vaibhav Kumar"
+```
+
+```powershell
+git config user.email "vaibhav11464@gmail.com"
+```
+
+Phir:
+
+```powershell
+git add .
+```
+
+```powershell
+git commit -m "Initial Flask application and Docker setup"
+```
+
+```powershell
+git branch -M main
+```
+
+```powershell
+git remote add origin https://github.com/VAIBHAV11464/student-k8s-demo-v2.git
+```
+
+```powershell
+git push -u origin main
+```
+
+Agar browser sign-in khulta hai, GitHub sign-in complete karo.
+
+GitHub repository refresh karke check karo ki files aa gayi hain.
+
+**Note:** `pipeline.yml` abhi empty hai toh workflow run nahi hoga. Next step mein usse fill karenge.
+
+---
+
+**17. Pehle sirf automated testing workflow banao**
+
+`.github/workflows/pipeline.yml` mein ye paste karo:
+
+```yaml
+name: Student Kubernetes CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Checkout and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run automated tests
+        run: python -m pytest -v
+```
+
+**Ctrl+S**, phir:
+
+```powershell
+git add .github/workflows/pipeline.yml
+```
+
+```powershell
+git commit -m "Add automated CI tests"
+```
+
+```powershell
+git push
+```
+
+GitHub repository → **Actions** → newest **Student Kubernetes CI/CD** run kholo.
+
+**Expected:** `Checkout and Test` green.
+
+**Hum kya kar rahe hain:** GitHub apne computer par tumhara code download karke tests run kar raha hai.
+
+**Screenshot lo:** successful workflow.
+
+---
+
+**18. Intentionally failed test demonstrate karo**
+
+`test_app.py` mein sirf ye line:
+
+```python
+assert b"Kubernetes CI/CD is working" in response.data
+```
+
+Temporarily replace karo:
+
+```python
+assert b"Wrong message" in response.data
+```
+
+Save karo aur run karo:
+
+```powershell
+git add test_app.py
+```
+
+```powershell
+git commit -m "Demonstrate a failing test"
+```
+
+```powershell
+git push
+```
+
+GitHub → **Actions** mein latest run fail hoga.
+
+**Screenshot lo:** failed test aur error.
+
+Ab assertion ko wapas correct karo:
+
+```python
+assert b"Kubernetes CI/CD is working" in response.data
+```
+
+Save karke:
+
+```powershell
+git add test_app.py
+```
+
+```powershell
+git commit -m "Restore correct test"
+```
+
+```powershell
+git push
+```
+
+Wait karo jab tak workflow phir green na ho.
+
+**Meaning:** galat output hone par pipeline error pakad leti hai.
+
+---
+
+**19. Docker Hub par public repository banao**
+
+Open:
+
+[Docker Hub repository creation](https://hub.docker.com/repository/create)
+
+Fill karo:
+
+```text
+Namespace: vaibhav11464
+Repository name: student-k8s-demo
+Visibility: Public
+```
+
+**Create** click karo.
+
+Agar ye repository already hai, usi ko use karo.
+
+Full image repository:
+
+```text
+vaibhav11464/student-k8s-demo
+```
+
+---
+
+**20. Docker access token generate karo**
+
+Docker website par:
+
+1. Profile picture click karo.
+2. **Account settings**.
+3. **Personal access tokens**.
+4. **Generate new token**.
+5. Description:
+
+```text
+github-actions-lab
+```
+
+6. Expiration assignment complete hone tak valid rakho.
+7. Permissions **Repo Read & Write**.
+8. **Generate** click karo.
+9. `dckr_pat_` se start hone wale token ke paas **Copy** click karo.
+
+**`docker login` command copy nahi karni. Actual token copy karna hai.**
+
+Token ko chat, screenshot ya project file mein share mat karna.
+
+---
+
+**21. Token aur username GitHub secrets mein save karo**
+
+Apne **naye** GitHub repository `student-k8s-demo-v2` mein jao.
+
+Click sequence:
+
+```text
+Settings
+   → Secrets and variables
+      → Actions
+         → Secrets
+            → New repository secret
+```
+
+Pehla secret:
+
+```text
+Name: DOCKERHUB_USERNAME
+
+Secret: vaibhav11464
+```
+
+**Add secret** click karo.
+
+Phir **New repository secret** click karo.
+
+Doosra secret:
+
+```text
+Name: DOCKERHUB_TOKEN
+
+Secret: Docker se copy kiya hua poora token
+```
+
+**Add secret** click karo.
+
+**Meaning:** GitHub Actions ko Docker Hub par image upload karne ki permission mil rahi hai.
+
+Secrets repository-specific hote hain—purane `sss` repo ke secrets naye repo mein automatically nahi aayenge.
+
+---
+
+**22. Ab complete workflow paste karo**
+
+`pipeline.yml` ka poora content replace karke ye paste karo:
+
+```yaml
+name: Student Kubernetes CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Checkout and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -v
+
+  docker:
+    name: Build and Push Docker Image
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/student-k8s-demo:${{ github.sha }}
+```
+
+`${{ ... }}` expressions exactly aise hi rehne do.
+
+Save karo, phir:
+
+```powershell
+git add .github/workflows/pipeline.yml
+```
+
+```powershell
+git commit -m "Add Docker build and publish stage"
+```
+
+```powershell
+git push
+```
+
+GitHub → **Actions** mein dono jobs green hone chahiye:
+
+```text
+Checkout and Test
+Build and Push Docker Image
+```
+
+Docker Hub → `student-k8s-demo` → **Tags** mein naya tag dikhna chahiye.
+
+**Screenshot lo:** dono green jobs aur Docker Hub tag.
+
+---
+
+**23. Published image ka full name nikalo**
+
+Dono jobs successful hone ke baad terminal mein:
+
+```powershell
+git rev-parse HEAD
+```
+
+Ye ek long commit SHA dega.
+
+Full image name aisa hoga:
+
+```text
+vaibhav11464/student-k8s-demo:YOUR_FULL_COMMIT_SHA
+```
+
+**Abhi mila hua SHA copy karke next step mein use karo. Ye us successful workflow wale commit ka SHA hona chahiye.**
+
+---
+
+**24. `k8s/deployment.yaml` fill karo**
+
+Ye paste karo:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: student-k8s-demo
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: student-k8s-demo
+
+  template:
+    metadata:
+      labels:
+        app: student-k8s-demo
+
+    spec:
+      containers:
+        - name: student-k8s-demo
+          image: vaibhav11464/student-k8s-demo:REPLACE_WITH_COMMIT_SHA
+
+          ports:
+            - containerPort: 5000
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+
+            initialDelaySeconds: 5
+            periodSeconds: 5
+```
+
+Is part ko replace karo:
+
+```text
+REPLACE_WITH_COMMIT_SHA
+```
+
+Yahan Step 23 ka **actual full SHA** paste karo. Placeholder rehne mat dena.
+
+**Meaning:**
+
+- `replicas: 2` → app ki 2 running copies.
+- `image` → kaunsi published application chalani hai.
+- `readinessProbe` → `/health` check karke traffic bhejna hai.
+
+---
+
+**25. `k8s/service.yaml` fill karo**
+
+```yaml
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: student-k8s-demo
+
+spec:
+  type: NodePort
+
+  selector:
+    app: student-k8s-demo
+
+  ports:
+    - port: 80
+      targetPort: 5000
+      nodePort: 30080
+```
+
+Save karo.
+
+**Meaning:** Service browser se aane wali requests application ke port 5000 tak pahunchayegi.
+
+---
+
+**26. Kubernetes mein deploy karo**
+
+Docker Desktop aur Kubernetes running hone chahiye.
+
+Commands ek-ek karke:
+
+```powershell
+kubectl config use-context docker-desktop
+```
+
+```powershell
+kubectl get nodes
+```
+
+```powershell
+kubectl apply -f k8s/deployment.yaml
+```
+
+```powershell
+kubectl apply -f k8s/service.yaml
+```
+
+```powershell
+kubectl rollout status deployment/student-k8s-demo
+```
+
+```powershell
+kubectl get deployments
+```
+
+```powershell
+kubectl get pods
+```
+
+```powershell
+kubectl get services
+```
+
+**Expected:**
+
+```text
+Deployment READY: 2/2
+
+Two Pods:
+Running
+Running
+```
+
+**Screenshot lo:** deployment, Pods aur Service.
+
+---
+
+**27. Kubernetes wali application kholo**
+
+Browser:
+
+```text
+http://localhost:30080/
+```
+
+Health endpoint:
+
+```text
+http://localhost:30080/health
+```
+
+Agar localhost NodePort se nahi khulta, terminal mein:
+
+```powershell
+kubectl port-forward service/student-k8s-demo 8080:80
+```
+
+Terminal ko running rehne do.
+
+Browser:
+
+```text
+http://localhost:8080/
+```
+
+```text
+http://localhost:8080/health
+```
+
+**Screenshot lo:** Kubernetes se served welcome message aur health response.
+
+Port-forward stop karne ke liye us terminal mein **Ctrl+C**.
+
+---
+
+**28. Application ko Version 2 mein update karo**
+
+`app.py` mein:
+
+```python
+return "Hello Students! Kubernetes CI/CD is working!"
+```
+
+Replace karo:
+
+```python
+return "Version 2: Updated through CI/CD!"
+```
+
+Ab `test_app.py` mein:
+
+```python
+assert b"Kubernetes CI/CD is working" in response.data
+```
+
+Replace karo:
+
+```python
+assert b"Version 2: Updated through CI/CD!" in response.data
+```
+
+**Dono files save karo.**
+
+Test bhi update karna zaroori hai, kyunki expected message badal gaya hai.
+
+---
+
+**29. Version 2 test karke push karo**
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -v
+```
+
+Expected:
+
+```text
+2 passed
+```
+
+Ab updated files aur deployment manifests commit karo:
+
+```powershell
+git add app.py test_app.py k8s/deployment.yaml k8s/service.yaml
+```
+
+```powershell
+git commit -m "Update application to Version 2 and add Kubernetes manifests"
+```
+
+```powershell
+git push
+```
+
+GitHub → **Actions** mein latest run ke dono jobs green hone tak wait karo.
+
+**Meaning:** GitHub ab Version 2 ka naya Docker image publish karega.
+
+---
+
+**30. Kubernetes mein Version 2 deploy karo**
+
+Usi terminal mein ek-ek karke:
+
+```powershell
+$sha = (git rev-parse HEAD).Trim()
+```
+
+```powershell
+kubectl set image deployment/student-k8s-demo "student-k8s-demo=vaibhav11464/student-k8s-demo:$sha"
+```
+
+```powershell
+kubectl rollout status deployment/student-k8s-demo
+```
+
+```powershell
+kubectl get pods
+```
+
+Browser refresh karo.
+
+Agar port-forward use kar rahe the, zaroorat pade toh dobara start karo:
+
+```powershell
+kubectl port-forward service/student-k8s-demo 8080:80
+```
+
+Open:
+
+```text
+http://localhost:8080/
+```
+
+Expected:
+
+```text
+Version 2: Updated through CI/CD!
+```
+
+**Screenshot lo:** successful rollout, running Pods aur updated message.
+
+**Hum kya kar rahe hain:** Kubernetes ko old image ki jagah newly published Version 2 image chalane bol rahe hain.
+
+---
+
+**31. Submission ke liye ye screenshots collect karo**
+
+| Evidence | Kya dikhna chahiye |
+|---|---|
+| Tools and cluster | Versions aur Kubernetes node `Ready` |
+| Local tests | `2 passed` |
+| Local application | Welcome page aur healthy response |
+| Docker build | Image successfully built |
+| Docker container | `docker ps`, logs aur browser |
+| GitHub repository | Project files uploaded |
+| CI success | Tests pass |
+| Intentional CI failure | Wrong assertion caught |
+| Docker publishing | Dono Actions jobs green |
+| Docker Hub | Commit SHA wala image tag |
+| Kubernetes | Deployment `2/2`, two running Pods |
+| Update | Browser mein Version 2 message |
+
+**Is assignment mein GitHub tests aur image publishing automatically karta hai. Kubernetes deployment/update tum terminal se manually karte ho.**
