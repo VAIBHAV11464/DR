@@ -1,1 +1,841 @@
 
+I wrote the full project and ran the tests locally. Push 1 passes 7 tests and Push 2 passes 11. All three YAML files parse. I could not build the Docker image here because Docker Desktop isn't running on this machine, and the GitHub Actions pipeline has not run yet. The first real check of the build and deploy jobs will be your Push 1.
+
+The app is a Flask web page with a menu. A command-line `input()` menu would crash inside a Kubernetes pod because the pod has no keyboard input, so it has to be a web page.
+
+How the five stages map:
+1. **Source code:** the files below, written in VS Code.
+2. **Version control:** Git, pushed to GitHub.
+3. **Continuous integration:** a GitHub Actions job that checks out the code, installs dependencies and runs pytest.
+4. **Build:** a Docker image tagged `v<run number>-<short commit id>` and pushed to Docker Hub.
+5. **Deployment:** a Kubernetes cluster (kind) created inside the GitHub runner. The Deployment uses that push's exact tag, and a NodePort Service exposes the app.
+
+## Folder structure
+
+```
+library-book-app/
+├── .github/workflows/ci-cd.yml
+├── k8s/deployment.yaml
+├── k8s/service.yaml
+├── templates/base.html
+├── templates/index.html
+├── templates/add.html
+├── templates/books.html
+├── tests/test_app.py
+├── app.py
+├── library.py
+├── requirements.txt
+├── pytest.ini
+├── Dockerfile
+└── .gitignore
+```
+
+## Push 1: add and view books
+
+**library.py**
+```python
+class Library:
+    def __init__(self):
+        self.books = []
+        self.next_id = 1
+
+    def add_book(self, title, author):
+        title = (title or "").strip()
+        author = (author or "").strip()
+        if not title or not author:
+            raise ValueError("Title and author are required.")
+
+        book = {"id": self.next_id, "title": title, "author": author, "available": True}
+        self.books.append(book)
+        self.next_id += 1
+        return book
+
+    def available_books(self):
+        return [book for book in self.books if book["available"]]
+```
+
+**app.py**
+```python
+import os
+
+from flask import Flask, flash, redirect, render_template, request, url_for
+
+from library import Library
+
+
+def create_app():
+    app = Flask(__name__)
+    app.secret_key = os.getenv("SECRET_KEY", "library-secret-key")
+    library = Library()
+
+    @app.context_processor
+    def inject_version():
+        return {"version": os.getenv("APP_VERSION", "dev")}
+
+    @app.route("/")
+    def home():
+        return render_template("index.html")
+
+    @app.route("/add", methods=["GET", "POST"])
+    def add_book():
+        if request.method == "POST":
+            try:
+                book = library.add_book(request.form.get("title"), request.form.get("author"))
+                flash(f"Book '{book['title']}' added with ID {book['id']}.", "success")
+                return redirect(url_for("view_books"))
+            except ValueError as error:
+                flash(str(error), "error")
+
+        return render_template("add.html")
+
+    @app.route("/books")
+    def view_books():
+        return render_template("books.html", books=library.available_books())
+
+    @app.route("/health")
+    def health():
+        return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
+
+    return app
+
+
+app = create_app()
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+```
+
+**templates/base.html**
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Library Book Management</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 40px; background: #f4f6f8; color: #222; }
+        .container { max-width: 760px; margin: auto; background: #fff; padding: 24px 32px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1); }
+        nav { padding-bottom: 12px; border-bottom: 1px solid #ddd; }
+        nav a { margin-right: 18px; color: #1a5fb4; text-decoration: none; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        th { background: #e9eef5; }
+        label { display: block; margin-top: 12px; font-weight: bold; }
+        input, select { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+        button { margin-top: 16px; padding: 10px 18px; background: #1a5fb4; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+        .message { padding: 10px; margin-top: 16px; border-radius: 4px; }
+        .success { background: #e6f4ea; color: #1e7b34; }
+        .error { background: #fdecea; color: #b3261e; }
+        footer { margin-top: 24px; font-size: 13px; color: #666; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Library Book Management</h1>
+
+    <nav>
+        <a href="{{ url_for('home') }}">Menu</a>
+        <a href="{{ url_for('add_book') }}">Add Book</a>
+        <a href="{{ url_for('view_books') }}">View Available Books</a>
+    </nav>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="message {{ category }}">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+
+    <footer>Version: {{ version }}</footer>
+</div>
+</body>
+</html>
+```
+
+**templates/index.html**
+```html
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Main Menu</h2>
+<ol>
+    <li><a href="{{ url_for('add_book') }}">Add a Book</a></li>
+    <li><a href="{{ url_for('view_books') }}">View Available Books</a></li>
+</ol>
+{% endblock %}
+```
+
+**templates/add.html**
+```html
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Add a Book</h2>
+<form method="post">
+    <label for="title">Title</label>
+    <input type="text" id="title" name="title" required>
+
+    <label for="author">Author</label>
+    <input type="text" id="author" name="author" required>
+
+    <button type="submit">Add Book</button>
+</form>
+{% endblock %}
+```
+
+**templates/books.html**
+```html
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Available Books</h2>
+{% if books %}
+<table>
+    <tr>
+        <th>ID</th>
+        <th>Title</th>
+        <th>Author</th>
+        <th>Status</th>
+    </tr>
+    {% for book in books %}
+    <tr>
+        <td>{{ book.id }}</td>
+        <td>{{ book.title }}</td>
+        <td>{{ book.author }}</td>
+        <td>Available</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p>No books available.</p>
+{% endif %}
+{% endblock %}
+```
+
+**tests/test_app.py**
+```python
+import pytest
+
+from app import create_app
+from library import Library
+
+
+@pytest.fixture
+def client():
+    app = create_app()
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+def test_add_book_stores_book_as_available():
+    library = Library()
+    book = library.add_book("Clean Code", "Robert C. Martin")
+    assert book == {"id": 1, "title": "Clean Code", "author": "Robert C. Martin", "available": True}
+
+
+def test_add_book_requires_title_and_author():
+    library = Library()
+    with pytest.raises(ValueError):
+        library.add_book("", "Robert C. Martin")
+    with pytest.raises(ValueError):
+        library.add_book("Clean Code", "   ")
+
+
+def test_available_books_lists_all_added_books():
+    library = Library()
+    library.add_book("Clean Code", "Robert C. Martin")
+    library.add_book("Refactoring", "Martin Fowler")
+    titles = [book["title"] for book in library.available_books()]
+    assert titles == ["Clean Code", "Refactoring"]
+
+
+def test_menu_page_shows_options(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"Add a Book" in response.data
+    assert b"View Available Books" in response.data
+
+
+def test_add_and_view_book_through_web(client):
+    response = client.post("/add", data={"title": "Python Crash Course", "author": "Eric Matthes"}, follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Python Crash Course" in response.data
+    assert b"Eric Matthes" in response.data
+
+
+def test_add_book_with_missing_fields_shows_error(client):
+    response = client.post("/add", data={"title": "", "author": ""})
+    assert response.status_code == 200
+    assert b"Title and author are required." in response.data
+
+
+def test_health_endpoint(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+```
+
+**requirements.txt**
+```
+Flask==3.1.0
+Werkzeug==3.1.3
+gunicorn==23.0.0
+pytest==8.3.4
+```
+
+**pytest.ini**
+```ini
+[pytest]
+pythonpath = .
+testpaths = tests
+```
+
+**.gitignore**
+```
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+```
+
+**Dockerfile**
+```dockerfile
+FROM python:3.12-slim
+
+ARG APP_VERSION=dev
+
+ENV APP_VERSION=${APP_VERSION} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py library.py ./
+COPY templates ./templates
+
+EXPOSE 5000
+
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "app:app"]
+```
+
+**k8s/deployment.yaml**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: library-book-app
+  labels:
+    app: library-book-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: library-book-app
+  template:
+    metadata:
+      labels:
+        app: library-book-app
+    spec:
+      containers:
+        - name: library-book-app
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+```
+
+**k8s/service.yaml**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: library-book-service
+spec:
+  type: NodePort
+  selector:
+    app: library-book-app
+  ports:
+    - port: 80
+      targetPort: 5000
+      nodePort: 30080
+```
+
+**.github/workflows/ci-cd.yml**
+```yaml
+name: Library Book Management CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  IMAGE_NAME: ${{ vars.DOCKERHUB_USERNAME }}/library-book-app
+
+jobs:
+  continuous-integration:
+    name: Continuous Integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run automated tests
+        run: pytest -v
+
+  build:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: continuous-integration
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Generate unique image tag
+        id: tag
+        run: |
+          TAG="v${{ github.run_number }}-${GITHUB_SHA::7}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE_NAME:$TAG" >> "$GITHUB_OUTPUT"
+          echo "Image for this push: $IMAGE_NAME:$TAG"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tag.outputs.image }}
+          build-args: |
+            APP_VERSION=${{ steps.tag.outputs.tag }}
+
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Create Kubernetes cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: library-cluster
+
+      - name: Use the image built from this push
+        run: sed -i "s|IMAGE_PLACEHOLDER|${{ needs.build.outputs.image }}|" k8s/deployment.yaml
+
+      - name: Deploy application and service
+        run: |
+          kubectl apply -f k8s/deployment.yaml
+          kubectl apply -f k8s/service.yaml
+          kubectl rollout status deployment/library-book-app --timeout=180s
+
+      - name: Verify deployment
+        run: |
+          kubectl get deployments -o wide
+          kubectl get pods -o wide
+          kubectl get services
+          DEPLOYED_IMAGE=$(kubectl get deployment library-book-app -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "Deployed image: $DEPLOYED_IMAGE"
+          test "$DEPLOYED_IMAGE" = "${{ needs.build.outputs.image }}"
+
+      - name: Access application through the service
+        run: |
+          kubectl port-forward service/library-book-service 8080:80 > /dev/null 2>&1 &
+          sleep 5
+          curl -s http://localhost:8080/health
+          echo
+          curl -s http://localhost:8080/ | grep "Version:"
+```
+
+## One-time setup before Push 1
+
+1. On Docker Hub, go to Account settings, then Personal access tokens, and create a token with **Read & Write** access.
+2. On GitHub, create an empty repo named `library-book-app`. Don't add a README.
+3. In the repo, go to Settings, then Secrets and variables, then Actions:
+   - On the **Variables** tab, add `DOCKERHUB_USERNAME` set to your Docker Hub username. It's a variable, not a secret, so the image name shows in the logs instead of `***`.
+   - On the **Secrets** tab, add `DOCKERHUB_TOKEN` set to the token from step 1.
+
+## Run locally in the VS Code terminal
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+pytest -v
+python app.py
+```
+
+Open http://localhost:5000 to see the app.
+
+## Push 1 commands
+
+```powershell
+git init
+git add .
+git commit -m "Push 1: add and view books"
+git branch -M main
+git remote add origin https://github.com/<your-username>/library-book-app.git
+git push -u origin main
+```
+
+## Push 2: issue books and update availability
+
+`books.html`, `requirements.txt`, `pytest.ini`, `.gitignore`, `Dockerfile`, `k8s/` and the workflow stay as they are. Replace or add these files.
+
+**library.py**
+```python
+class Library:
+    def __init__(self):
+        self.books = []
+        self.next_id = 1
+
+    def add_book(self, title, author):
+        title = (title or "").strip()
+        author = (author or "").strip()
+        if not title or not author:
+            raise ValueError("Title and author are required.")
+
+        book = {"id": self.next_id, "title": title, "author": author, "available": True}
+        self.books.append(book)
+        self.next_id += 1
+        return book
+
+    def available_books(self):
+        return [book for book in self.books if book["available"]]
+
+    def issued_books(self):
+        return [book for book in self.books if not book["available"]]
+
+    def issue_book(self, book_id, member):
+        try:
+            book_id = int(book_id)
+        except (TypeError, ValueError):
+            raise ValueError("Invalid book ID.") from None
+
+        member = (member or "").strip()
+        if not member:
+            raise ValueError("Member name is required.")
+
+        for book in self.books:
+            if book["id"] == book_id:
+                if not book["available"]:
+                    raise ValueError(f"Book '{book['title']}' is already issued.")
+                book["available"] = False
+                book["issued_to"] = member
+                return book
+
+        raise ValueError(f"Book with ID {book_id} not found.")
+```
+
+**app.py**
+```python
+import os
+
+from flask import Flask, flash, redirect, render_template, request, url_for
+
+from library import Library
+
+
+def create_app():
+    app = Flask(__name__)
+    app.secret_key = os.getenv("SECRET_KEY", "library-secret-key")
+    library = Library()
+
+    @app.context_processor
+    def inject_version():
+        return {"version": os.getenv("APP_VERSION", "dev")}
+
+    @app.route("/")
+    def home():
+        return render_template("index.html")
+
+    @app.route("/add", methods=["GET", "POST"])
+    def add_book():
+        if request.method == "POST":
+            try:
+                book = library.add_book(request.form.get("title"), request.form.get("author"))
+                flash(f"Book '{book['title']}' added with ID {book['id']}.", "success")
+                return redirect(url_for("view_books"))
+            except ValueError as error:
+                flash(str(error), "error")
+
+        return render_template("add.html")
+
+    @app.route("/books")
+    def view_books():
+        return render_template("books.html", books=library.available_books())
+
+    @app.route("/issue", methods=["GET", "POST"])
+    def issue_book():
+        if request.method == "POST":
+            try:
+                book = library.issue_book(request.form.get("book_id"), request.form.get("member"))
+                flash(f"Book '{book['title']}' issued to {book['issued_to']}.", "success")
+                return redirect(url_for("issue_book"))
+            except ValueError as error:
+                flash(str(error), "error")
+
+        return render_template("issue.html", books=library.available_books(), issued=library.issued_books())
+
+    @app.route("/health")
+    def health():
+        return {"status": "ok", "version": os.getenv("APP_VERSION", "dev")}
+
+    return app
+
+
+app = create_app()
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+```
+
+**templates/base.html** (only the `<nav>` block changes)
+```html
+    <nav>
+        <a href="{{ url_for('home') }}">Menu</a>
+        <a href="{{ url_for('add_book') }}">Add Book</a>
+        <a href="{{ url_for('view_books') }}">View Available Books</a>
+        <a href="{{ url_for('issue_book') }}">Issue Book</a>
+    </nav>
+```
+
+**templates/index.html**
+```html
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Main Menu</h2>
+<ol>
+    <li><a href="{{ url_for('add_book') }}">Add a Book</a></li>
+    <li><a href="{{ url_for('view_books') }}">View Available Books</a></li>
+    <li><a href="{{ url_for('issue_book') }}">Issue a Book</a></li>
+</ol>
+{% endblock %}
+```
+
+**templates/issue.html** (new file)
+```html
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Issue a Book</h2>
+{% if books %}
+<form method="post">
+    <label for="book_id">Book</label>
+    <select id="book_id" name="book_id" required>
+        {% for book in books %}
+        <option value="{{ book.id }}">{{ book.id }} - {{ book.title }} by {{ book.author }}</option>
+        {% endfor %}
+    </select>
+
+    <label for="member">Member Name</label>
+    <input type="text" id="member" name="member" required>
+
+    <button type="submit">Issue Book</button>
+</form>
+{% else %}
+<p>No books available to issue.</p>
+{% endif %}
+
+<h2>Issued Books</h2>
+{% if issued %}
+<table>
+    <tr>
+        <th>ID</th>
+        <th>Title</th>
+        <th>Author</th>
+        <th>Issued To</th>
+        <th>Status</th>
+    </tr>
+    {% for book in issued %}
+    <tr>
+        <td>{{ book.id }}</td>
+        <td>{{ book.title }}</td>
+        <td>{{ book.author }}</td>
+        <td>{{ book.issued_to }}</td>
+        <td>Issued</td>
+    </tr>
+    {% endfor %}
+</table>
+{% else %}
+<p>No books issued yet.</p>
+{% endif %}
+{% endblock %}
+```
+
+**tests/test_app.py**
+```python
+import pytest
+
+from app import create_app
+from library import Library
+
+
+@pytest.fixture
+def client():
+    app = create_app()
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+def test_add_book_stores_book_as_available():
+    library = Library()
+    book = library.add_book("Clean Code", "Robert C. Martin")
+    assert book == {"id": 1, "title": "Clean Code", "author": "Robert C. Martin", "available": True}
+
+
+def test_add_book_requires_title_and_author():
+    library = Library()
+    with pytest.raises(ValueError):
+        library.add_book("", "Robert C. Martin")
+    with pytest.raises(ValueError):
+        library.add_book("Clean Code", "   ")
+
+
+def test_available_books_lists_all_added_books():
+    library = Library()
+    library.add_book("Clean Code", "Robert C. Martin")
+    library.add_book("Refactoring", "Martin Fowler")
+    titles = [book["title"] for book in library.available_books()]
+    assert titles == ["Clean Code", "Refactoring"]
+
+
+def test_issue_book_updates_availability():
+    library = Library()
+    library.add_book("Clean Code", "Robert C. Martin")
+    library.add_book("Refactoring", "Martin Fowler")
+    book = library.issue_book(1, "Rahul")
+    assert book["available"] is False
+    assert book["issued_to"] == "Rahul"
+    assert [b["title"] for b in library.available_books()] == ["Refactoring"]
+    assert [b["title"] for b in library.issued_books()] == ["Clean Code"]
+
+
+def test_issue_book_rejects_invalid_requests():
+    library = Library()
+    library.add_book("Clean Code", "Robert C. Martin")
+    library.issue_book(1, "Rahul")
+    with pytest.raises(ValueError, match="already issued"):
+        library.issue_book(1, "Priya")
+    with pytest.raises(ValueError, match="not found"):
+        library.issue_book(99, "Priya")
+    with pytest.raises(ValueError, match="Invalid book ID"):
+        library.issue_book("abc", "Priya")
+    library.add_book("Refactoring", "Martin Fowler")
+    with pytest.raises(ValueError, match="Member name is required"):
+        library.issue_book(2, "  ")
+
+
+def test_menu_page_shows_options(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"Add a Book" in response.data
+    assert b"View Available Books" in response.data
+    assert b"Issue a Book" in response.data
+
+
+def test_add_and_view_book_through_web(client):
+    response = client.post("/add", data={"title": "Python Crash Course", "author": "Eric Matthes"}, follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Python Crash Course" in response.data
+    assert b"Eric Matthes" in response.data
+
+
+def test_add_book_with_missing_fields_shows_error(client):
+    response = client.post("/add", data={"title": "", "author": ""})
+    assert response.status_code == 200
+    assert b"Title and author are required." in response.data
+
+
+def test_issue_book_through_web_removes_it_from_available_list(client):
+    client.post("/add", data={"title": "Python Crash Course", "author": "Eric Matthes"}, follow_redirects=True)
+    client.post("/add", data={"title": "Fluent Python", "author": "Luciano Ramalho"}, follow_redirects=True)
+
+    response = client.post("/issue", data={"book_id": "1", "member": "Rahul"}, follow_redirects=True)
+    assert response.status_code == 200
+    assert b"Book &#39;Python Crash Course&#39; issued to Rahul." in response.data
+
+    response = client.get("/books")
+    assert b"Python Crash Course" not in response.data
+    assert b"Fluent Python" in response.data
+
+
+def test_issue_already_issued_book_shows_error(client):
+    client.post("/add", data={"title": "Python Crash Course", "author": "Eric Matthes"}, follow_redirects=True)
+    client.post("/issue", data={"book_id": "1", "member": "Rahul"}, follow_redirects=True)
+    response = client.post("/issue", data={"book_id": "1", "member": "Priya"})
+    assert b"already issued" in response.data
+
+
+def test_health_endpoint(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+```
+
+## Push 2 commands
+
+```powershell
+git add .
+git commit -m "Push 2: add book issuing and update availability"
+git push
+```
+
+## Checking the results
+
+- **GitHub Actions tab:** each push makes one run with 3 jobs (Continuous Integration, Build and Push Docker Image, Deploy to Kubernetes).
+- **Docker Hub:** `library-book-app` has two tags, for example `v1-a1b2c3d` and `v2-e4f5g6h`.
+- **Deploy job logs:** they print `Deployed image: <user>/library-book-app:v2-...` and the page footer `Version: v2-...`. The job fails if the deployed tag doesn't match the tag built in that run.
+
+## Things to watch
+
+- **Keep it to exactly two pushes.** Everything except the Push 2 changes goes in Push 1, including the workflow, Dockerfile and `k8s/` files. Don't edit files on the GitHub website, because that makes an extra commit and starts an extra run.
+- **The Docker Hub repo must be public,** which is the default for a new repo. Otherwise the cluster can't pull the image.
+- **The cluster doesn't last.** The kind cluster runs inside the GitHub runner and is deleted when the job ends, so the logs are your proof of deployment. If your lab wants the app open in your own browser, I can change the deploy job to use a self-hosted runner with Docker Desktop Kubernetes and http://localhost:30080.
+- **Data resets when the pod restarts.** Books are stored in memory, and that's also why the app runs with 1 replica and 1 gunicorn worker.
+
+The project folder, in its final Push 2 state, is at `C:\Users\Administrator\.t3\scratch\2026-10-28-give-me-the-code-for-5fefd126\library-book-app`.
